@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NUTTY 888 Studio</title>
+
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose"></script>
+
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: Arial, sans-serif;
+            background: #f4f6f9;
+            padding: 20px;
+            text-align: center;
+        }
+
+        h1 {
+            margin-bottom: 15px;
+            color: #333;
+        }
+
+        .controls {
+            margin-bottom: 15px;
+        }
+
+        select, button {
+            padding: 10px 15px;
+            margin: 5px;
+            border-radius: 8px;
+            border: 1px solid #ccc;
+            font-size: 14px;
+            background: white;
+        }
+
+        button {
+            cursor: pointer;
+            background: #007bff;
+            color: white;
+            border: none;
+            transition: 0.3s;
+        }
+
+        button:hover {
+            background: #0056b3;
+        }
+
+        .wrapper {
+            position: relative;
+            display: inline-block;
+            max-width: 100%;
+            margin: 20px auto;
+        }
+
+        video {
+            width: 100%;
+            max-width: 900px;
+            border-radius: 12px;
+            background: black;
+            display: block;
+        }
+
+        canvas {
+            position: absolute;
+            left: 0;
+            top: 0;
+            border-radius: 12px;
+        }
+
+        .results {
+            margin-top: 20px;
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            max-width: 500px;
+            margin-left: auto;
+            margin-right: auto;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+
+        .results p {
+            margin: 10px 0;
+            font-size: 18px;
+            color: #333;
+        }
+
+        .results span {
+            font-weight: bold;
+            color: #007bff;
+        }
+
+        .status {
+            margin-top: 10px;
+            color: green;
+            font-weight: bold;
+            font-size: 16px;
+        }
+
+        .status.error {
+            color: #dc3545;
+        }
+
+        @media(max-width: 768px) {
+            .results p {
+                font-size: 16px;
+            }
+            select, button {
+                width: 100%;
+                max-width: 350px;
+            }
+            video {
+                max-width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <h1>🥜 NUTTY 888 Studio 🥜</h1>
+
+    <div class="controls">
+        <select id="cameraSelect">
+            <option>Loading cameras...</option>
+        </select>
+        <button onclick="startSelectedCamera()">📹 Start Camera</button>
+    </div>
+
+    <div class="wrapper">
+        <video id="video" autoplay muted playsinline></video>
+        <canvas id="canvas"></canvas>
+    </div>
+
+    <div class="results">
+        <p>📏 Height: <span id="height">---</span></p>
+        <p>⚖️ Weight: <span id="weight">---</span></p>
+        <p>📊 BMI: <span id="bmi">---</span></p>
+        <p>👤 Detection: <span id="personStatus">Waiting...</span></p>
+    </div>
+
+    <div class="status" id="status">Loading...</div>
+
+    <script>
+        let detector;
+        let currentStream;
+        let videoWidth, videoHeight;
+
+        const video = document.getElementById("video");
+        const canvas = document.getElementById("canvas");
+        const ctx = canvas.getContext("2d");
+        const cameraSelect = document.getElementById("cameraSelect");
+
+        // ปรับ canvas ให้ขนาดตรงกับ video
+        function resizeCanvas() {
+            if (video.videoWidth && video.videoHeight) {
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                videoWidth = video.videoWidth;
+                videoHeight = video.videoHeight;
+            }
+        }
+
+        async function loadModels() {
+            try {
+                detector = await poseDetection.createDetector(
+                    poseDetection.SupportedModels.BlazePose,
+                    {
+                        runtime: 'mediapipe',
+                        modelType: 'full',
+                        solutionPath: 'https://cdn.jsdelivr.net/npm/@mediapipe/pose'
+                    }
+                );
+                document.getElementById("status").innerText = "✅ AI Model Loaded";
+            } catch (error) {
+                console.error("Error loading model:", error);
+                document.getElementById("status").innerText = "❌ Error loading AI model";
+            }
+        }
+
+        async function loadCameras() {
+            try {
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const cameras = devices.filter(d => d.kind === "videoinput");
+                
+                if (cameras.length === 0) {
+                    cameraSelect.innerHTML = "<option>No cameras found</option>";
+                    return;
+                }
+
+                cameraSelect.innerHTML = "";
+                cameras.forEach((camera, index) => {
+                    const option = document.createElement("option");
+                    option.value = camera.deviceId;
+                    option.text = camera.label || `Camera ${index + 1}`;
+                    cameraSelect.appendChild(option);
+                });
+            } catch (error) {
+                console.error("Error loading cameras:", error);
+                cameraSelect.innerHTML = "<option>Error loading cameras</option>";
+            }
+        }
+
+        async function startSelectedCamera() {
+            try {
+                if (currentStream) {
+                    currentStream.getTracks().forEach(track => track.stop());
+                }
+
+                const deviceId = cameraSelect.value;
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        deviceId: deviceId ? { exact: deviceId } : undefined,
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 },
+                    },
+                    audio: false
+                });
+
+                currentStream = stream;
+                video.srcObject = stream;
+                
+                video.onloadedmetadata = () => {
+                    resizeCanvas();
+                    detect();
+                };
+
+                await video.play();
+                document.getElementById("status").innerText = "📷 Camera Started";
+            } catch (error) {
+                console.error("Camera error:", error);
+                document.getElementById("status").innerText = "❌ " + error.message;
+                document.getElementById("status").classList.add("error");
+            }
+        }
+
+        function estimateHeight(keypoints) {
+            const nose = keypoints[0];
+            const leftAnkle = keypoints[27];
+            const rightAnkle = keypoints[28];
+
+            if (!nose || !leftAnkle || !rightAnkle) {
+                return null;
+            }
+
+            if (nose.score < 0.3 || leftAnkle.score < 0.3 || rightAnkle.score < 0.3) {
+                return null;
+            }
+
+            const ankleY = (leftAnkle.y + rightAnkle.y) / 2;
+            const pixelHeight = ankleY - nose.y;
+
+            // ปรับค่า multiplier ให้สมจริงมากขึ้น (ประมาณ 1.5-1.8)
+            const estimatedHeight = pixelHeight * 1.6;
+
+            return Math.round(estimatedHeight);
+        }
+
+        function estimateWeight(height) {
+            // ใช้ BMI ที่ปกติ (18.5-24.9)
+            const bmi = 22;
+            const meters = height / 100;
+
+            return Math.round(bmi * meters * meters);
+        }
+
+        function drawPoint(x, y, score = 1) {
+            const alpha = Math.min(score, 1);
+            ctx.beginPath();
+            ctx.arc(x, y, 5, 0, 2 * Math.PI);
+            ctx.fillStyle = `rgba(255, 0, 0, ${alpha})`;
+            ctx.fill();
+        }
+
+        function drawLine(a, b) {
+            if (!a || !b) return;
+            
+            ctx.beginPath();
+            ctx.moveTo(a.x, a.y);
+            ctx.lineTo(b.x, b.y);
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = "#00ff00";
+            ctx.stroke();
+        }
+
+        function drawSkeleton(pose) {
+            const points = pose.keypoints;
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // วาด points
+            points.forEach(point => {
+                if (point.score && point.score > 0.4) {
+                    drawPoint(point.x, point.y, point.score);
+                }
+            });
+
+            // วาด skeleton lines
+            const pairs = [
+                [11, 12], [11, 13], [13, 15], [12, 14],
+                [14, 16], [11, 23], [12, 24], [23, 24],
+                [23, 25], [25, 27], [24, 26], [26, 28]
+            ];
+
+            pairs.forEach(pair => {
+                const a = points[pair[0]];
+                const b = points[pair[1]];
+
+                if (a && b && a.score > 0.3 && b.score > 0.3) {
+                    drawLine(a, b);
+                }
+            });
+        }
+
+        async function detect() {
+            if (!detector || !video.srcObject) {
+                requestAnimationFrame(detect);
+                return;
+            }
+
+            try {
+                const poses = await detector.estimatePoses(video);
+
+                if (poses.length > 0) {
+                    const pose = poses[0];
+                    drawSkeleton(pose);
+
+                    document.getElementById("personStatus").innerText = "✅ Person Detected";
+
+                    const height = estimateHeight(pose.keypoints);
+
+                    if (height && height > 50 && height < 250) {
+                        const weight = estimateWeight(height);
+                        const bmi = (weight / Math.pow(height / 100, 2)).toFixed(1);
+
+                        document.getElementById("height").innerText = height + " cm";
+                        document.getElementById("weight").innerText = weight + " kg";
+                        document.getElementById("bmi").innerText = bmi;
+                    }
+                } else {
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    document.getElementById("personStatus").innerText = "❌ No Person Detected";
+                }
+            } catch (error) {
+                console.error("Detection error:", error);
+            }
+
+            requestAnimationFrame(detect);
+        }
+
+        async function init() {
+            try {
+                // ขออนุญาตเข้ากล้อง
+                await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+                document.getElementById("status").innerText = "Loading cameras...";
+                
+                await loadCameras();
+                await loadModels();
+                
+                // เริ่มกล้องแรกอัตโนมัติ
+                if (cameraSelect.value) {
+                    await startSelectedCamera();
+                }
+            } catch (error) {
+                console.error("Init error:", error);
+                document.getElementById("status").innerText = "❌ Camera permission denied";
+                document.getElementById("status").classList.add("error");
+            }
+        }
+
+        // เริ่มต้นเมื่อ page load
+        window.addEventListener('load', init);
+    </script>
+</body>
+</html>
